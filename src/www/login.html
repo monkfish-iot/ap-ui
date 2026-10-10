@@ -1,0 +1,85 @@
+<!-- SPDX-FileCopyrightText: 2026 Monkfish IoT -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 - AP 管理</title>
+<link href="assets/css/bootstrap.min.css" rel="stylesheet">
+<link href="assets/css/all.min.css" rel="stylesheet">
+<link href="assets/css/wrthub.css" rel="stylesheet">
+</head>
+<body>
+<div class="d-flex align-items-center justify-content-center vh-100">
+    <div class="card shadow-sm" style="width:22rem;">
+        <div class="card-body p-4">
+            <h5 class="text-center mb-1">AP 管理界面</h5>
+            <p class="text-center text-muted small mb-4">Access Point</p>
+
+            <div class="mb-3">
+                <label class="form-label small mb-1" for="username">用户名</label>
+                <input id="username" class="form-control form-control-sm" value="root" autocomplete="username">
+            </div>
+            <div class="mb-3">
+                <label class="form-label small mb-1" for="password">密码</label>
+                <input id="password" type="password" class="form-control form-control-sm" autocomplete="current-password">
+            </div>
+
+            <div id="msg" class="alert alert-danger py-2 small d-none mb-3"></div>
+
+            <button id="loginBtn" class="btn btn-primary btn-sm w-100">登录</button>
+        </div>
+    </div>
+</div>
+
+<script src="assets/js/api.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var msgEl = document.getElementById('msg');
+    var btn = document.getElementById('loginBtn');
+    var userEl = document.getElementById('username');
+    var passEl = document.getElementById('password');
+
+    /* 回跳目标：只接受站内相对路径，拒绝绝对地址/协议，防开放重定向 */
+    var target = new URLSearchParams(location.search).get('redirect') || 'index.html';
+    if (target.charAt(0) === '/' || target.indexOf(':') > -1) target = 'index.html';
+
+    function showError(text) {
+        msgEl.textContent = text;
+        msgEl.classList.remove('d-none');
+    }
+
+    async function doLogin() {
+        var u = userEl.value.trim();
+        var p = passEl.value;
+        if (!u || !p) { showError('请输入用户名和密码'); return; }
+
+        msgEl.classList.add('d-none');
+        btn.disabled = true;
+        btn.textContent = '登录中…';
+        try {
+            await API.login(u, p);
+            location.replace(target);
+        } catch (e) {
+            API.clearSession();
+            showError(e.message || '登录失败');
+            btn.disabled = false;
+            btn.textContent = '登录';
+        }
+    }
+
+    btn.addEventListener('click', doLogin);
+    passEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
+
+    /* 会话仍有效则直接回跳原页面 */
+    (async function () {
+        if (await API.checkSession()) location.replace(target);
+        else userEl.focus();
+    })();
+})();
+</script>
+</body>
+</html>

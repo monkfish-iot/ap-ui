@@ -1,0 +1,558 @@
+<!-- SPDX-FileCopyrightText: 2026 Monkfish IoT -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>固件升级 - AP 管理</title>
+<link href="assets/css/bootstrap.min.css" rel="stylesheet">
+<link href="assets/css/all.min.css" rel="stylesheet">
+<link href="assets/css/wrthub.css" rel="stylesheet">
+<style>
+body { margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+#app  { flex: 1 1 auto; display: flex; min-height: 0; }
+.main { flex: 1 1 auto; overflow-y: auto; padding: 0.9rem; }
+.upload-area { border: 2px dashed #dee2e6; border-radius: 0.5rem; transition: all .2s; cursor: pointer; }
+.upload-area:hover, .upload-area.dragover { border-color: #0d6efd; background: #f0f6ff; }
+</style>
+</head>
+<body>
+
+<header id="whNavbar"></header>
+<div id="app">
+    <aside id="whSidebar"></aside>
+    <main class="main">
+
+        <div id="toastContainer" class="position-fixed top-0 end-0 p-3" style="z-index:11;"></div>
+        <div id="errBox" class="alert alert-danger small d-none"></div>
+        <div id="succBox" class="alert alert-success small d-none"></div>
+
+        <!-- 页面标题 + 提示 -->
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h6 class="mb-0"><i class="fas fa-cloud-arrow-up me-1"></i>固件升级 <span class="badge bg-light text-dark border" id="fwTag">加载中...</span></h6>
+        </div>
+
+        <div class="alert alert-primary small py-2 mb-3">
+            <i class="fas fa-circle-info me-1"></i>
+            升级会中断网络连接并自动重启设备，整个过程约 1-2 分钟。
+            升级前建议先通过 SSH 备份配置文件。
+        </div>
+
+        <!-- ① 当前固件 & 存储状态 -->
+        <div class="row g-2 mb-3">
+            <div class="col-md-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header"><i class="fas fa-microchip me-1"></i>当前固件</div>
+                    <div class="card-body" id="devInfo">加载中...</div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header"><i class="fas fa-database me-1"></i>存储状态</div>
+                    <div class="card-body" id="stgInfo">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ② 固件上传 -->
+        <div class="card shadow-sm mb-3">
+            <div class="card-header"><i class="fas fa-cloud-arrow-up me-1"></i>上传固件镜像</div>
+            <div class="card-body">
+                <div id="uploadArea" class="upload-area p-4 text-center mb-3">
+                    <i class="fas fa-cloud-arrow-up fa-2x text-muted mb-2 d-block"></i>
+                    <div class="fw-semibold">点击或拖拽到此处上传固件镜像</div>
+                    <div class="small text-muted mt-1">支持 .bin / .img 格式，最大 ≤ /tmp 可用空间</div>
+                    <input type="file" id="fwInput" class="d-none" accept=".bin,.img" />
+                </div>
+
+                <!-- 上传进度 -->
+                <div id="uploadProgress" class="d-none mb-3">
+                    <div class="d-flex justify-content-between small mb-1">
+                        <span id="uploadFile">—</span>
+                        <span id="uploadPct">0%</span>
+                    </div>
+                    <div class="progress" style="height:6px;"><div class="progress-bar bg-primary" id="uploadBar" style="width:0%"></div></div>
+                </div>
+
+                <!-- 已上传镜像信息 -->
+                <div id="imgInfo" class="d-none mb-3"></div>
+
+                <!-- 操作按钮 -->
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary btn-sm" id="verifyBtn" disabled><i class="fas fa-check me-1"></i>检查镜像</button>
+                    <button class="btn btn-warning btn-sm" id="flashBtn" disabled><i class="fas fa-bolt me-1"></i>立即升级</button>
+                    <button class="btn btn-outline-danger btn-sm" id="discardBtn" disabled><i class="fas fa-trash me-1"></i>删除镜像</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="refreshInfoBtn"><i class="fas fa-rotate-right me-1"></i>刷新状态</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ③ 升级能力 -->
+        <div class="card shadow-sm">
+            <div class="card-header"><i class="fas fa-shield-halved me-1"></i>升级能力</div>
+            <div class="card-body small" id="capInfo">加载中...</div>
+        </div>
+
+    </main>
+</div>
+
+<!-- FLASH 确认弹窗 -->
+<div class="modal fade" id="flashModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title"><i class="fas fa-triangle-exclamation me-2"></i>固件升级确认</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fw-semibold">确认刷写固件？</p>
+                <ul class="mb-3">
+                    <li>设备将在 <span class="text-danger fw-bold">30-120 秒内重启</span>，期间网络中断</li>
+                    <li>刷写 <span class="text-danger fw-bold">失败可能导致设备变砖</span>，需串口恢复</li>
+                    <li>建议先 <span class="fw-bold">备份配置文件</span></li>
+                </ul>
+                <div class="alert alert-warning small">
+                    请输入确认词 <code class="fw-bold">FLASH</code> 以继续：
+                    <input type="text" class="form-control mt-2" id="flashConfirm" placeholder="输入 FLASH">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-warning" id="flashConfirmBtn"><i class="fas fa-bolt me-1"></i>立即升级</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 升级等待 / 重启探测弹窗（不可手动关闭） -->
+<div class="modal fade" id="waitModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="fas fa-spinner fa-spin me-2"></i>固件升级中</h5>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex align-items-center gap-3 mb-3">
+                    <div class="spinner-border text-primary flex-shrink-0" role="status" style="width:2.5rem;height:2.5rem;"></div>
+                    <div class="flex-grow-1">
+                        <div class="fw-semibold" id="waitPhase">正在探测设备…</div>
+                        <div class="small text-muted" id="waitHint">设备仍在运行，等待其重启</div>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between small mb-1">
+                    <span class="text-muted">已用时间</span>
+                    <span class="font-monospace" id="waitElapsed">00:00</span>
+                </div>
+                <div class="progress mb-3" style="height:8px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" id="waitBar" style="width:0%"></div>
+                </div>
+
+                <div class="d-flex justify-content-between small mb-1">
+                    <span class="text-muted">探测目标</span>
+                    <span class="font-monospace" id="waitTarget">—</span>
+                </div>
+                <div class="border rounded p-2 small font-monospace" id="waitLog"
+                     style="height:5.5rem;overflow-y:auto;background:#f8f9fa;"></div>
+            </div>
+            <div class="modal-footer">
+                <span class="small text-muted me-auto"><i class="fas fa-circle-info me-1"></i>请勿关闭页面或断电</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="waitSkipBtn">强制跳转登录页</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="assets/js/api.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+(function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var state = { info: null, image: null, verified: false };
+
+    /* ---- init ---- */
+    async function init() {
+        await Layout.mount('upgrade.html');
+        bindEvents();
+        loadInfo();
+    }
+
+    function bindEvents() {
+        $('refreshInfoBtn').addEventListener('click', loadInfo);
+        $('verifyBtn').addEventListener('click', verifyImage);
+        $('discardBtn').addEventListener('click', discardImage);
+        $('flashBtn').addEventListener('click', openFlashModal);
+        $('flashConfirmBtn').addEventListener('click', confirmFlash);
+        $('waitSkipBtn').addEventListener('click', function () { stopWatch(); toLoginPage(); });
+
+        /* 拖拽上传 */
+        var area = $('uploadArea');
+        area.addEventListener('click', function () { $('fwInput').click(); });
+        area.addEventListener('dragover', function (e) { e.preventDefault(); area.classList.add('dragover'); });
+        area.addEventListener('dragleave', function () { area.classList.remove('dragover'); });
+        area.addEventListener('drop', function (e) {
+            e.preventDefault(); area.classList.remove('dragover');
+            if (e.dataTransfer.files && e.dataTransfer.files.length) upload(e.dataTransfer.files[0]);
+        });
+        $('fwInput').addEventListener('change', function (e) {
+            if (e.target.files && e.target.files.length) upload(e.target.files[0]);
+        });
+    }
+
+    /* ---- 加载状态 ---- */
+    function loadInfo() {
+        showError(null);
+        API.call('mk.apupgrade', 'info', {}).then(function (res) {
+            if (!res || res.error) { showError((res && res.error) || '获取状态失败'); return; }
+            state.info = res;
+            state.image = res.image;
+
+            renderDevice(res.device, res.firmware);
+            renderStorage(res.storage);
+            renderCaps(res.capabilities);
+            renderImage(res.image);
+
+            $('fwTag').textContent = res.firmware ? res.firmware.release : '-';
+        }).catch(function (err) { showError('请求失败：' + err); });
+    }
+
+    function renderDevice(d, fw) {
+        if (!d) { $('devInfo').innerHTML = '<span class="text-muted">暂无数据</span>'; return; }
+        var html =
+            '<table class="table table-sm table-borderless mb-0 small">' +
+            row('设备型号', d.model) +
+            row('板型', d.board) +
+            row('目标平台', d.target) +
+            row('内核版本', d.kernel) +
+            row('当前固件', fw ? fw.release : '-') +
+            '</table>';
+        $('devInfo').innerHTML = html;
+    }
+    function renderStorage(s) {
+        if (!s) { $('stgInfo').innerHTML = '<span class="text-muted">暂无数据</span>'; return; }
+        var rows = [];
+        if (s.tmp_avail_bytes != null) rows.push(['/tmp 可用', fmtSize(s.tmp_avail_bytes) + '（临时存储）']);
+        if (s.overlay_total_kb != null) rows.push(['Overlay 总量', s.overlay_total_kb + ' KB（约 ' + fmtSize(s.overlay_total_kb * 1024) + '）']);
+        if (s.overlay_free_kb != null) rows.push(['Overlay 剩余', s.overlay_free_kb + ' KB']);
+        if (s.mtd_firmware) rows.push(['固件分区', s.mtd_firmware.device + ' / ' + fmtSize(s.mtd_firmware.size_bytes || 0)]);
+        if (!rows.length) rows.push(['—', '暂无存储数据']);
+
+        var html = '<table class="table table-sm table-borderless mb-0 small">' +
+            rows.map(function (r) { return row(r[0], r[1]); }).join('') +
+            '</table>';
+        $('stgInfo').innerHTML = html;
+    }
+    function renderCaps(c) {
+        if (!c) return;
+        $('capInfo').innerHTML =
+            (c.sysupgrade ? '<i class="fas fa-check text-success me-1"></i>sysupgrade 可用（支持固件刷写）' : '<i class="fas fa-xmark text-danger me-1"></i>sysupgrade 不可用') +
+            '<br><i class="fas fa-check text-success me-1"></i>固件镜像预校验（sysupgrade -T）' +
+            '<br><span class="text-muted small">上传走 cgi-io，保存在 /tmp/firmware.bin</span>';
+    }
+    function renderImage(img) {
+        state.verified = false;
+        $('imgInfo').classList.add('d-none');
+        $('verifyBtn').disabled = true;
+        $('flashBtn').disabled = true;
+        $('discardBtn').disabled = true;
+
+        if (!img || !img.exists) return;
+
+        var size = img.size_bytes != null ? fmtSize(img.size_bytes) : '-';
+        $('imgInfo').classList.remove('d-none');
+        $('imgInfo').innerHTML =
+            '<div class="border rounded p-3">' +
+            '<div class="d-flex justify-content-between align-items-center mb-2">' +
+            '<div><i class="fas fa-file-code me-1"></i><code class="small">' + Layout.esc(img.path) + '</code></div>' +
+            '<span class="badge bg-secondary">' + size + '</span></div>' +
+            '<div class="small text-muted">镜像已上传，建议先点「检查镜像」验证合法性后再升级。</div>' +
+            '</div>';
+
+        $('verifyBtn').disabled = false;
+        $('discardBtn').disabled = false;
+    }
+
+    function row(k, v) {
+        return '<tr><td class="text-muted" style="width:8rem;">' + Layout.esc(k) + '</td><td class="font-monospace small">' + Layout.esc(v || '-') + '</td></tr>';
+    }
+    function fmtSize(bytes) {
+        if (!bytes) return '0 B';
+        var u = ['B', 'KB', 'MB', 'GB'];
+        var i = 0, n = bytes;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return n.toFixed(n >= 10 || i === 0 ? 0 : 1) + ' ' + u[i];
+    }
+
+    /* ---- 上传 ----
+     * 通道：uhttpd 的 /cgi-bin/cgi-upload（cgi-io）。契约与已交付的 wrthub-ui upgrade.html
+     * 完全一致（真机验证过），三个字段缺一不可：
+     *   sessionid = ubus 会话（走**表单字段**，不是请求头）
+     *   filename  = 目标绝对路径（cgi-upload 据此决定落盘位置）
+     *   filedata  = 文件本体
+     * 响应是 JSON，失败时带 failure/message；无会话返回 403。
+     */
+    function upload(file) {
+        showError(null);
+        var sizeInfo = fmtSize(file.size);
+        if (state.info && state.info.storage && state.info.storage.tmp_avail_bytes && file.size > state.info.storage.tmp_avail_bytes) {
+            showError('镜像大小 ' + sizeInfo + ' 超过 /tmp 可用空间');
+            return;
+        }
+
+        $('uploadProgress').classList.remove('d-none');
+        $('uploadFile').textContent = file.name + ' (' + sizeInfo + ')';
+        $('uploadBar').style.width = '0%';
+        $('uploadPct').textContent = '0%';
+
+        var form = new FormData();
+        form.append('sessionid', API.session || '');
+        form.append('filename', '/tmp/firmware.bin');
+        form.append('filedata', file);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/cgi-bin/cgi-upload');
+        xhr.upload.onprogress = function (e) {
+            if (e.lengthComputable) {
+                var pct = Math.round(e.loaded / e.total * 100);
+                $('uploadBar').style.width = pct + '%';
+                $('uploadPct').textContent = pct + '%';
+            }
+        };
+        xhr.onload = function () {
+            $('uploadProgress').classList.add('d-none');
+            if (xhr.status === 403 || xhr.status === 401) {
+                API.clearSession(); API.toLogin();
+                return;
+            }
+            var r = null;
+            try { r = JSON.parse(xhr.responseText); } catch (e2) { r = null; }
+            if (xhr.status < 200 || xhr.status >= 300 || (r && r.failure)) {
+                showError('上传失败：' + ((r && r.message) || ('HTTP ' + xhr.status)));
+                return;
+            }
+            showToast('上传成功', 'success');
+            loadInfo();
+        };
+        xhr.onerror = function () {
+            $('uploadProgress').classList.add('d-none');
+            showError('上传失败：网络错误');
+        };
+
+        xhr.send(form);
+    }
+
+    /* ---- verify ---- */
+    function verifyImage() {
+        showError(null); showSuccess(null);
+        $('verifyBtn').disabled = true;
+        $('verifyBtn').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>检查中...';
+
+        API.call('mk.apupgrade', 'verify', {}).then(function (res) {
+            $('verifyBtn').disabled = false;
+            $('verifyBtn').innerHTML = '<i class="fas fa-check me-1"></i>检查镜像';
+
+            if (!res || res.error) { showError((res && res.error) || '检查失败'); return; }
+
+            if (res.valid) {
+                state.verified = true;
+                showSuccess('镜像合法！' + (res.md5 ? ' MD5: ' + res.md5.substring(0, 16) + '...' : ''));
+                $('flashBtn').disabled = false;
+                $('imgInfo').innerHTML +=
+                    '<div class="mt-2 border-top pt-2 small text-success"><i class="fas fa-circle-check me-1"></i>已通过 sysupgrade -T 校验（exit 0）</div>';
+            } else {
+                state.verified = false;
+                showError('镜像校验失败（exit ' + res.rc + '）' + (res.output ? '：' + res.output.substring(0, 200) : ''));
+            }
+        }).catch(function (err) {
+            $('verifyBtn').disabled = false;
+            $('verifyBtn').innerHTML = '<i class="fas fa-check me-1"></i>检查镜像';
+            showError('请求失败：' + err);
+        });
+    }
+
+    /* ---- discard ---- */
+    function discardImage() {
+        if (!confirm('确认删除已上传的固件镜像？')) return;
+        API.call('mk.apupgrade', 'discard', {}).then(function (res) {
+            if (res && !res.error) showToast('已删除镜像', 'success');
+            loadInfo();
+        }).catch(function (err) { showError('删除失败：' + err); });
+    }
+
+    /* ---- flash ---- */
+    function openFlashModal() {
+        $('flashConfirm').value = '';
+        var el = document.getElementById('flashModal');
+        if (window.bootstrap) { new bootstrap.Modal(el).show(); }
+        else { el.classList.add('show'); el.style.display = 'block'; }
+    }
+    function closeModal(id) {
+        var el = document.getElementById(id);
+        if (window.bootstrap) { bootstrap.Modal.getInstance(el).hide(); }
+        else { el.classList.remove('show'); el.style.display = 'none'; }
+    }
+    function confirmFlash() {
+        var v = $('flashConfirm').value.trim();
+        if (v !== 'FLASH') { showError('请输入 FLASH 确认'); return; }
+
+        $('flashConfirmBtn').disabled = true;
+        API.call('mk.apupgrade', 'flash', { confirm: 'FLASH', keep: 1 }).then(function (res) {
+            $('flashConfirmBtn').disabled = false;
+            closeModal('flashModal');
+            if (!res || res.error) { showError((res && res.error) || '升级失败'); return; }
+
+            showSuccess(res.message || '升级已启动');
+            $('flashBtn').disabled = true;
+            startWatch();
+        }).catch(function (err) {
+            $('flashConfirmBtn').disabled = false;
+            showError('请求失败：' + err);
+        });
+    }
+
+    /* ---- 升级等待：轮询探测设备，走完「在线 → 离线 → 恢复」三段后跳登录页 ----
+     * 探测目标就是当前页面所在的 IP（location.host），取 login.html 这个静态页面
+     * 做探针，加时间戳绕开缓存。设备重启期间通过 rpcd 会话已失效，恢复后必须重新登录。
+     */
+    var WATCH = {
+        t0: 0, tick: null, probe: null,
+        attempts: 0, misses: 0,
+        sawDown: false, finished: false,
+        EST: 120,         /* 预计总耗时（秒），仅用于进度条估算 */
+        POLL_MS: 3000,    /* 探测间隔 */
+        TIMEOUT_MS: 3000  /* 单次探测超时 */
+    };
+
+    function startWatch() {
+        WATCH.t0 = Date.now();
+        WATCH.attempts = 0; WATCH.misses = 0;
+        WATCH.sawDown = false; WATCH.finished = false;
+        $('waitTarget').textContent = location.host;
+        $('waitLog').innerHTML = '';
+        $('waitElapsed').textContent = '00:00';
+        $('waitBar').style.width = '0%';
+        setPhase('正在探测设备…', '设备仍在运行，等待其重启');
+
+        var el = document.getElementById('waitModal');
+        if (window.bootstrap) { new bootstrap.Modal(el, { backdrop: 'static', keyboard: false }).show(); }
+        else { el.classList.add('show'); el.style.display = 'block'; }
+
+        WATCH.tick = setInterval(onTick, 1000);
+        probeOnce();
+        WATCH.probe = setInterval(probeOnce, WATCH.POLL_MS);
+    }
+
+    function stopWatch() {
+        WATCH.finished = true;
+        if (WATCH.tick) clearInterval(WATCH.tick);
+        if (WATCH.probe) clearInterval(WATCH.probe);
+        WATCH.tick = WATCH.probe = null;
+    }
+
+    function toLoginPage() {
+        API.clearSession();
+        API.toLogin();
+    }
+
+    function onTick() {
+        var sec = Math.floor((Date.now() - WATCH.t0) / 1000);
+        $('waitElapsed').textContent = fmtClock(sec);
+        if (!WATCH.finished) {
+            $('waitBar').style.width = Math.min(95, Math.round(sec / WATCH.EST * 100)) + '%';
+        }
+    }
+
+    function probeOnce() {
+        if (WATCH.finished) return;
+        WATCH.attempts++;
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', 'login.html?_=' + Date.now(), true);
+        xhr.timeout = WATCH.TIMEOUT_MS;
+        xhr.onload = function () { onProbe(true); };
+        xhr.onerror = function () { onProbe(false); };
+        xhr.ontimeout = function () { onProbe(false); };
+        try { xhr.send(); } catch (e) { onProbe(false); }
+    }
+
+    function onProbe(ok) {
+        if (WATCH.finished) return;
+
+        if (ok) {
+            WATCH.misses = 0;
+            if (WATCH.sawDown) {
+                /* 失联后又恢复 —— 重启完成 */
+                stopWatch();
+                $('waitBar').style.width = '100%';
+                setPhase('设备已恢复', '即将跳转到登录页…');
+                waitLog('设备已恢复响应（共耗时 ' + fmtClock(elapsedSec()) + '），即将跳转登录页', 'text-success');
+                setTimeout(toLoginPage, 1500);
+                return;
+            }
+            if (WATCH.attempts === 1 || WATCH.attempts % 5 === 0) {
+                waitLog('探测 ' + location.host + ' · 在线（等待重启开始）');
+            }
+            return;
+        }
+
+        WATCH.misses++;
+        if (!WATCH.sawDown && WATCH.misses >= 2) {
+            WATCH.sawDown = true;
+            setPhase('设备已离线', '正在刷写固件并重启，请耐心等待…');
+            waitLog('设备已离线，进入固件更新和重启阶段', 'text-warning');
+            return;
+        }
+        if (!WATCH.sawDown) {
+            waitLog('探测 ' + location.host + ' · 无响应（继续确认）');
+        }
+    }
+
+    function setPhase(title, hint) {
+        $('waitPhase').textContent = title;
+        $('waitHint').textContent = hint || '';
+    }
+
+    function elapsedSec() { return Math.floor((Date.now() - WATCH.t0) / 1000); }
+
+    function fmtClock(sec) {
+        var m = Math.floor(sec / 60), s = sec % 60;
+        return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function waitLog(msg, cls) {
+        var box = $('waitLog');
+        var line = document.createElement('div');
+        if (cls) line.className = cls;
+        line.textContent = '[' + fmtClock(elapsedSec()) + '] ' + msg;
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    /* ---- helpers ---- */
+    function showError(msg) {
+        var el = $('errBox');
+        if (!msg) { el.classList.add('d-none'); el.textContent = ''; return; }
+        el.textContent = msg; el.classList.remove('d-none');
+    }
+    function showSuccess(msg) {
+        var el = $('succBox');
+        if (!msg) { el.classList.add('d-none'); el.textContent = ''; return; }
+        el.textContent = msg; el.classList.remove('d-none');
+    }
+    function showToast(msg, type) {
+        type = type || 'info';
+        var c = $('toastContainer');
+        var el = document.createElement('div');
+        el.className = 'toast align-items-center text-bg-' + type + ' border-0 show';
+        el.setAttribute('role', 'alert');
+        el.innerHTML = '<div class="d-flex"><div class="toast-body small">' + Layout.esc(msg) + '</div></div>';
+        c.appendChild(el);
+        setTimeout(function () { el.classList.remove('show'); setTimeout(function () { c.removeChild(el); }, 300); }, 2500);
+    }
+
+    init();
+})();
+</script>
+
+</body>
+</html>

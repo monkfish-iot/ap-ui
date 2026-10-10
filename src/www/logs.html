@@ -1,0 +1,251 @@
+<!-- SPDX-FileCopyrightText: 2026 Monkfish IoT -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系统日志 - AP 管理</title>
+<link href="assets/css/bootstrap.min.css" rel="stylesheet">
+<link href="assets/css/all.min.css" rel="stylesheet">
+<link href="assets/css/wrthub.css" rel="stylesheet">
+<style>
+body { margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+#app  { flex: 1 1 auto; display: flex; min-height: 0; }
+.main { flex: 1 1 auto; overflow-y: auto; padding: 0.9rem; }
+</style>
+</head>
+<body>
+
+<header id="whNavbar"></header>
+<div id="app">
+    <aside id="whSidebar"></aside>
+    <main class="main">
+
+        <div id="toastContainer" class="position-fixed top-0 end-0 p-3" style="z-index:11;"></div>
+        <div id="errBox" class="alert alert-danger small d-none"></div>
+
+        <!-- 页面标题 + 操作栏 -->
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h6 class="mb-0"><i class="fas fa-file-lines me-1"></i>系统日志 <span class="badge bg-light text-dark border" id="logCountBadge">加载中...</span></h6>
+            <div class="d-flex gap-2 align-items-center">
+                <input class="form-control form-control-sm" style="width:170px;" placeholder="关键字搜索" id="logFilter">
+                <select class="form-select form-select-sm" style="width:auto;" id="logLevel">
+                    <option value="all">全部级别</option>
+                    <option value="info">INFO</option>
+                    <option value="warn">WARN</option>
+                    <option value="err">ERROR</option>
+                </select>
+                <button class="btn btn-outline-secondary btn-sm" id="refreshBtn"><i class="fas fa-rotate-right"></i> 刷新</button>
+                <button class="btn btn-outline-danger btn-sm" id="clearBtn"><i class="fas fa-trash"></i> 清空</button>
+            </div>
+        </div>
+
+        <!-- 日志卡 -->
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-2">
+                <ul class="nav nav-pills card-header-tabs" role="tablist" id="logTabs">
+                    <!-- tabs 动态渲染 -->
+                </ul>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: calc(100vh - 280px); overflow-y: auto;">
+                    <table class="table table-sm mb-0" id="logTable">
+                        <thead class="table-light sticky-top">
+                            <tr>
+                                <th style="width:120px;">时间</th>
+                                <th style="width:70px;">级别</th>
+                                <th style="width:90px;">模块</th>
+                                <th>内容</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logTbody">
+                            <tr><td colspan="4" class="text-center text-muted py-3">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-footer bg-white py-2 d-flex justify-content-between align-items-center">
+                <span class="small text-muted">日志来自 logd 内存缓冲（重启即清空，最多 2000 条）</span>
+                <div class="d-flex align-items-center gap-2 small text-muted">
+                    <span><i class="fas fa-circle-info me-1"></i>自动刷新：<span id="autoRefreshStatus">已开启（5s）</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 清空确认 modal -->
+        <div class="modal fade" id="clearModal" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title"><i class="fas fa-triangle-exclamation me-2"></i>清空日志确认</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>此操作将清空当前所有日志缓冲，<span class="text-danger fw-bold">不可恢复</span>。</p>
+                        <div class="alert alert-warning small">
+                            为防止误操作，请在下方输入 <code class="fw-bold">CLEAR</code> 后点确认。
+                        </div>
+                        <input type="text" class="form-control" id="clearConfirm" placeholder="输入 CLEAR">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-danger" id="clearConfirmBtn"><i class="fas fa-trash me-1"></i>确认清空</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script src="assets/js/api.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+(function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var state = { logs: [], tabs: [], activeTab: 'all', total: 0 };
+    var refreshTimer = null;
+    var autoRefresh = true;
+
+    /* ---- init ---- */
+    async function init() {
+        await Layout.mount('logs.html');
+        bindEvents();
+        loadLogs();
+        if (autoRefresh) startAutoRefresh();
+    }
+
+    function bindEvents() {
+        $('logFilter').addEventListener('input', function () { renderLogs(); });
+        $('logLevel').addEventListener('change', function () { renderLogs(); });
+        $('refreshBtn').addEventListener('click', function () { loadLogs(); });
+        $('clearBtn').addEventListener('click', function () { openClearModal(); });
+        $('clearConfirmBtn').addEventListener('click', function () { confirmClear(); });
+    }
+
+    function startAutoRefresh() {
+        refreshTimer = setInterval(function () {
+            if (document.visibilityState === 'visible') loadLogs();
+        }, 5000);
+    }
+
+    /* ---- 加载 ---- */
+    function loadLogs() {
+        API.call('mk.aplogs', 'logs', { tab: state.activeTab }).then(function (res) {
+            if (!res || res.error) { showError((res && res.error) || '加载失败'); return; }
+            state.logs = res.logs || [];
+            state.tabs = res.tabs || [];
+            state.total = state.logs.length;
+            renderTabs();
+            renderLogs();
+            showError(null);
+        }).catch(function (err) { showError('加载失败：' + err); });
+    }
+
+    function renderTabs() {
+        var c = $('logTabs');
+        c.innerHTML = state.tabs.map(function (t) {
+            var disabled = !t.supported ? ' disabled' : '';
+            var cls = (t.id === state.activeTab) ? ' active' : '';
+            var title = !t.supported ? (' title="' + Layout.esc(t.reason || '该 tab 暂不支持') + '"') : '';
+            return '<li class="nav-item"><button class="nav-link py-1 px-2 small' + cls + disabled + '" data-tab="' + t.id + '"' + title + '>' +
+                Layout.esc(t.label) + (!t.supported ? ' <i class="fas fa-lock text-muted"></i>' : '') +
+                '</button></li>';
+        }).join('');
+        c.querySelectorAll('button[data-tab]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                if (btn.disabled) return;
+                state.activeTab = btn.getAttribute('data-tab');
+                loadLogs();
+            });
+        });
+    }
+
+    /* ---- 渲染（带前端过滤） ---- */
+    function renderLogs() {
+        var kw = ($('logFilter').value || '').trim().toLowerCase();
+        var lv = $('logLevel').value;
+
+        var rows = state.logs.filter(function (l) {
+            if (lv !== 'all' && l.level !== lv) return false;
+            if (kw && (l.msg || '').toLowerCase().indexOf(kw) < 0 &&
+                (l.source || '').toLowerCase().indexOf(kw) < 0) return false;
+            return true;
+        });
+
+        $('logCountBadge').textContent = rows.length + ' / ' + state.total + ' 条';
+
+        var tbody = $('logTbody');
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">没有符合条件的日志</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rows.map(function (l) {
+            var lvCls = (l.level === 'err') ? 'bg-danger' : (l.level === 'warn') ? 'bg-warning text-dark' : 'bg-success';
+            return '<tr>' +
+                '<td class="text-muted small font-monospace">' + Layout.esc(l.time) + '</td>' +
+                '<td><span class="badge ' + lvCls + '">' + Layout.esc(l.level_label) + '</span></td>' +
+                '<td class="small">' + Layout.esc(l.source || '-') + '</td>' +
+                '<td class="small">' + Layout.esc(l.msg || '') + '</td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    /* ---- 清空 ---- */
+    function openClearModal() {
+        $('clearConfirm').value = '';
+        var el = document.getElementById('clearModal');
+        if (window.bootstrap) {
+            var m = new bootstrap.Modal(el); m.show();
+        } else {
+            el.classList.add('show'); el.style.display = 'block'; el.setAttribute('aria-modal', 'true');
+        }
+    }
+    function closeModal() {
+        var el = document.getElementById('clearModal');
+        if (window.bootstrap) { bootstrap.Modal.getInstance(el).hide(); }
+        else { el.classList.remove('show'); el.style.display = 'none'; }
+    }
+
+    function confirmClear() {
+        var v = $('clearConfirm').value.trim();
+        if (v !== 'CLEAR') { showError('请输入 CLEAR 确认'); return; }
+
+        $('clearConfirmBtn').disabled = true;
+        API.call('mk.aplogs', 'clear', { confirm: 'CLEAR' }).then(function (res) {
+            $('clearConfirmBtn').disabled = false;
+            if (!res || res.error) { showError((res && res.error) || '清空失败'); return; }
+            closeModal();
+            showToast('日志已清空', 'success');
+            loadLogs();
+        }).catch(function (err) {
+            $('clearConfirmBtn').disabled = false;
+            showError('请求失败：' + err);
+        });
+    }
+
+    /* ---- 辅助 ---- */
+    function showError(msg) {
+        var el = $('errBox');
+        if (!msg) { el.classList.add('d-none'); el.textContent = ''; return; }
+        el.textContent = msg; el.classList.remove('d-none');
+    }
+    function showToast(msg, type) {
+        type = type || 'info';
+        var c = $('toastContainer');
+        var el = document.createElement('div');
+        el.className = 'toast align-items-center text-bg-' + type + ' border-0 show';
+        el.setAttribute('role', 'alert');
+        el.innerHTML = '<div class="d-flex"><div class="toast-body small">' + Layout.esc(msg) + '</div></div>';
+        c.appendChild(el);
+        setTimeout(function () { el.classList.remove('show'); setTimeout(function () { c.removeChild(el); }, 300); }, 2500);
+    }
+
+    init();
+})();
+</script>
+
+</body>
+</html>

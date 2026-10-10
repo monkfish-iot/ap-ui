@@ -1,0 +1,39 @@
+{
+	"apui": {
+		"description": "AP-UI 管理界面（mk.ap* ubus 对象 + iwinfo 直接调用）",
+		"read": {
+			"ubus": {
+				"file": [ "read" ],
+
+				"mk.apinfo": [ "overview" ],
+				"mk.apnet": [ "settings" ],
+				"mk.apmaint": [],
+				"mk.apupgrade": [ "info" ],
+				"mk.aplogs": [ "logs" ],
+				"mk.apwireless": [ "info" ],
+				"mk.apportal": [ "info" ],
+
+				/* 前端直接调 —— 射频状态 / 在线终端 / 信道扫描（不在 mk.* 里包装，避免 ucode 嵌套调用死锁）*/
+				"iwinfo": [ "info", "assoclist", "scan" ],
+
+				/* 前端直接调 —— Portal 在线用户分页查询（同样不包装，避免嵌套调用死锁）*/
+				"webauthd.session": [ "list_users" ],
+
+				"session": [ "access", "list" ]
+			}
+		},
+		"write": {
+			"cgi-io": [ "upload" ],
+			"file": {
+				"/tmp/firmware.bin": [ "write" ]
+			},
+			"ubus": {
+				"mk.apnet": [ "settings_set", "rollback_cancel" ],
+				"mk.apmaint": [ "reboot_system" ],
+				"mk.apupgrade": [ "verify", "flash", "discard" ],
+				"mk.aplogs": [ "clear" ],
+				"session": [ "destroy" ]
+			}
+		}
+	}
+}

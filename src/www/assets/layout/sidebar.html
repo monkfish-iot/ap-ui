@@ -1,0 +1,28 @@
+<!-- SPDX-FileCopyrightText: 2026 Monkfish IoT -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!--
+  AP-UI 侧边栏：一级菜单平铺，不设二级手风琴。
+  菜单项按 data-nav 高亮。
+-->
+<div class="sidebar flex-shrink-0" style="width:220px;" id="sidebar">
+<div class="nav-scroll pt-3 pb-2 px-2">
+
+<ul class="nav nav-pills flex-column">
+<li class="nav-item"><a href="index.html"    class="nav-link nav-top" data-nav="index.html">   <i class="fas fa-gauge-high"></i> 运行信息</a></li>
+<li class="nav-item"><a href="network.html"  class="nav-link nav-top" data-nav="network.html"> <i class="fas fa-network-wired"></i> 网络设置</a></li>
+<li class="nav-item"><a href="wireless.html" class="nav-link nav-top" data-nav="wireless.html"><i class="fas fa-wifi"></i> 无线信息</a></li>
+
+<li class="nav-item"><a href="upgrade.html" class="nav-link nav-top" data-nav="upgrade.html"><i class="fas fa-cloud-arrow-up"></i> 固件升级</a></li>
+<li class="nav-item"><a href="logs.html"    class="nav-link nav-top" data-nav="logs.html">   <i class="fas fa-file-lines"></i> 系统日志</a></li>
+</ul>
+
+</div>
+
+<!-- 底部「退出」常驻 -->
+<div class="nav-logout-wrap px-2 pb-3 pt-2">
+<ul class="nav nav-pills flex-column nav-logout">
+<li class="nav-item"><a href="login.html" class="nav-link nav-top" id="sidebarLogoutBtn"><i class="fas fa-sign-out-alt"></i>退出</a></li>
+</ul>
+</div>
+
+</div>

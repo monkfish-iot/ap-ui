@@ -1,0 +1,653 @@
+<!-- SPDX-FileCopyrightText: 2026 Monkfish IoT -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>无线信息 - AP 管理</title>
+<link href="assets/css/bootstrap.min.css" rel="stylesheet">
+<link href="assets/css/all.min.css" rel="stylesheet">
+<link href="assets/css/wrthub.css" rel="stylesheet">
+<style>
+body { margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+#app  { flex: 1 1 auto; display: flex; min-height: 0; }
+.main { flex: 1 1 auto; overflow-y: auto; padding: 0.9rem; }
+.card-header-tabs .nav-link { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
+/* 选中态必须与 bg-white 的卡头区分：Bootstrap 的 .card-header-tabs 会把激活项背景改写成卡片底色（白），
+   与卡头同色导致「选中即隐形」，故显式指定品牌蓝 */
+#paramTabs.card-header-tabs .nav-link.active { background-color: var(--bs-primary); color: #fff; }
+.dl-tight dt, .dl-tight dd { padding-top: 0.2rem; padding-bottom: 0.2rem; }
+.dl-tight dd { margin-bottom: 0; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<header id="whNavbar"></header>
+<div id="app">
+    <aside id="whSidebar"></aside>
+    <main class="main">
+
+        <div id="toastContainer" class="position-fixed top-0 end-0 p-3" style="z-index:11;"></div>
+        <div id="errBox" class="alert alert-danger small d-none"></div>
+
+        <!-- 标题 -->
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h6 class="mb-0">
+                <i class="fas fa-wifi me-1"></i>无线信息
+                <span class="badge bg-secondary ms-1" id="radioBadge">-</span>
+            </h6>
+            <div class="d-flex align-items-center gap-2">
+                <span class="small text-muted" id="updatedAt">-</span>
+                <button class="btn btn-outline-secondary btn-sm" id="refreshBtn"><i class="fas fa-rotate-right"></i> 刷新</button>
+            </div>
+        </div>
+
+        <div class="alert alert-info small py-2 mb-3">
+            <i class="fas fa-circle-info me-1"></i>
+            本页为 <span class="fw-bold">只读参数展示</span>（不做任何修改）。配置项来自 <code>uci wireless</code>，
+            实时信道 / 发射功率 / 噪声来自 <code>iwinfo</code>。
+        </div>
+
+        <!-- 射频选择 -->
+        <ul class="nav nav-pills mb-3 gap-2" id="radioPills"></ul>
+
+        <div class="row g-2 mb-3">
+            <!-- 左：参数展示（按分组切换） -->
+            <div class="col-lg-8">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white pb-0">
+                        <ul class="nav nav-pills card-header-tabs border-bottom-0" id="paramTabs">
+                            <li class="nav-item"><button class="nav-link active" data-tab="basic" type="button">基本设置</button></li>
+                            <li class="nav-item"><button class="nav-link" data-tab="channel" type="button">信道</button></li>
+                            <li class="nav-item"><button class="nav-link" data-tab="security" type="button">安全</button></li>
+                            <li class="nav-item"><button class="nav-link" data-tab="advanced" type="button">高级</button></li>
+                        </ul>
+                    </div>
+                    <div class="card-body p-3" id="paramBody">
+                        <span class="text-muted small">加载中…</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右：实时状态 + 接入终端 -->
+            <div class="col-lg-4">
+                <div class="card shadow-sm mb-2">
+                    <div class="card-header bg-white py-2">
+                        <span class="small fw-semibold"><i class="fas fa-tower-broadcast me-1"></i>实时状态</span>
+                        <span class="small text-muted float-end" id="rtIface">-</span>
+                    </div>
+                    <div class="card-body p-2" id="rtBody">
+                        <span class="text-muted small">加载中…</span>
+                    </div>
+                </div>
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white py-2">
+                        <span class="small fw-semibold"><i class="fas fa-laptop me-1"></i>接入终端</span>
+                        <span class="badge bg-secondary float-end" id="rtClients">0</span>
+                    </div>
+                    <div class="card-body p-2 small text-muted" id="rtClientNote">
+                        每 10 秒自动刷新
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 信道扫描 -->
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="small fw-semibold"><i class="fas fa-satellite-dish me-1"></i>信道扫描</span>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="small text-muted" id="scanNote">尚未扫描</span>
+                    <button class="btn btn-primary btn-sm" id="scanBtn">
+                        <i class="fas fa-satellite-dish me-1"></i>开始扫描
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead class="table-light">
+                        <tr>
+                            <th style="width:24%;">SSID</th>
+                            <th style="width:17%;">BSSID</th>
+                            <th style="width:8%;">信道</th>
+                            <th style="width:9%;">频宽</th>
+                            <th style="width:14%;">加密</th>
+                            <th style="width:15%;">信号强度</th>
+                            <th style="width:7%;">dBm</th>
+                            <th style="width:6%;">操作</th>
+                        </tr>
+                        </thead>
+                        <tbody id="scanBody">
+                        <tr><td colspan="8" class="text-center text-muted small py-3">点「开始扫描」获取周边网络</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-footer bg-white py-2">
+                <div class="small text-muted">
+                    <i class="fas fa-triangle-exclamation text-warning me-1"></i>
+                    扫描会让所选射频<strong>短暂离开工作信道</strong>去侦听周边网络，本频段已接入的无线终端会卡顿约 1–2 秒
+                    （不影响有线管理连接）。结果只含所选射频的频段。
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+<footer id="whFooter"></footer>
+
+<script src="assets/js/api.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var $ = function (id) { return document.getElementById(id); };
+
+    var state = {
+        info: null,          /* mk.apwireless.info 结果 */
+        radios: [],
+        cur: null,           /* 当前选中的射频段名（radio0 / radio1） */
+        curTab: 'basic',
+        rt: {},              /* ifname → iwinfo info */
+        clients: {},         /* ifname → 终端数 */
+        scan: {},            /* 射频段名 → { results, at, elapsed_s } */
+        scanning: false,
+        timer: null
+    };
+
+    /* ================= 小工具 ================= */
+
+    function fmtClock(epoch) {
+        if (!epoch) return '-';
+        return new Date(epoch * 1000).toLocaleTimeString();
+    }
+
+    /* iw / iwinfo 可能把 SSID 里的非可打印字节转义成 \xNN（中文 SSID），展示前按 UTF-8 还原 */
+    function ssidText(raw) {
+        if (raw === null || raw === undefined) return raw;
+        if (String(raw).indexOf('\\x') < 0) return raw;
+        try {
+            var bytes = [];
+            for (var i = 0; i < raw.length; i++) {
+                if (raw.charAt(i) === '\\' && raw.charAt(i + 1) === 'x') {
+                    bytes.push(parseInt(raw.substr(i + 2, 2), 16));
+                    i += 3;
+                } else {
+                    bytes.push(raw.charCodeAt(i) & 0xff);
+                }
+            }
+            return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
+        } catch (e) {
+            return raw;
+        }
+    }
+
+    /* 链路质量条（本机 AP 的 Signal 恒为 0 dBm，故只展示 quality） */
+    function signalBar(value, max) {
+        if (value === null || value === undefined) return '<span class="text-muted">—</span>';
+        var m = Number(max) || 70;
+        var pct = Math.min(100, Math.max(0, Math.round(Number(value) / m * 100)));
+        var color = pct >= 60 ? '#198754' : (pct >= 30 ? '#ffc107' : '#dc3545');
+        return '<div class="signal-bar"><span style="width:' + pct + '%;background:' + color + ';"></span></div>';
+    }
+
+    /* 扫描结果 dBm → 百分比（口径 2·(dBm+100)） */
+    function dbmPct(dbm) {
+        if (dbm === null || dbm === undefined) return null;
+        var pct = 2 * (Number(dbm) + 100);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        return Math.round(pct);
+    }
+
+    function isTrue(v) { return v === true || v === 1 || v === '1'; }
+
+    function pick(v) {
+        if (v === null || v === undefined || v === '') return '<span class="text-muted">-</span>';
+        return Layout.esc(v);
+    }
+
+    function yesNo(v, yes, no) {
+        return isTrue(v)
+            ? '<span class="text-success">' + (yes || '是') + '</span>'
+            : '<span class="text-muted">' + (no || '否') + '</span>';
+    }
+
+    /* dl 行（与参考页面同一写法） */
+    function row(label, value) {
+        return '<dt class="col-5 col-md-4 text-muted">' + label + '</dt>' +
+               '<dd class="col-7 col-md-8">' + value + '</dd>';
+    }
+
+    function showErr(msg) {
+        var el = $('errBox');
+        if (!msg) { el.classList.add('d-none'); el.textContent = ''; return; }
+        el.textContent = msg; el.classList.remove('d-none');
+    }
+
+    function notify(msg, type) {
+        type = type || 'info';
+        var c = $('toastContainer');
+        var el = document.createElement('div');
+        el.className = 'toast align-items-center text-bg-' + type + ' border-0 show';
+        el.setAttribute('role', 'alert');
+        el.innerHTML = '<div class="d-flex"><div class="toast-body small">' + Layout.esc(msg) + '</div></div>';
+        c.appendChild(el);
+        setTimeout(function () { el.classList.remove('show'); setTimeout(function () { c.removeChild(el); }, 300); }, 2600);
+    }
+
+    /* ================= 数据加载 ================= */
+
+    function radioById(id) {
+        for (var i = 0; i < state.radios.length; i++)
+            if (state.radios[i].id === id) return state.radios[i];
+        return null;
+    }
+
+    function curRadio() { return radioById(state.cur); }
+
+    /* 第一个接口（本板每个射频只有一个 AP 接口） */
+    function curIface() {
+        var r = curRadio();
+        return (r && r.ifaces && r.ifaces.length) ? r.ifaces[0] : null;
+    }
+
+    /* 取某接口的实时状态（iwinfo info） */
+    function rtOf(ifname) {
+        return (ifname && state.rt[ifname]) ? state.rt[ifname] : null;
+    }
+
+    /* 拉取所有射频接口的实时状态 + 终端数（直接调 iwinfo，绕过 mk.* 避免嵌套死锁） */
+    async function loadRuntime(render) {
+        var tasks = [];
+        var names = [];
+        state.radios.forEach(function (r) {
+            (r.ifaces || []).forEach(function (f) {
+                if (!f.ifname) return;
+                names.push(f.ifname);
+                tasks.push(API.call('iwinfo', 'info', { device: f.ifname }));
+                tasks.push(API.call('iwinfo', 'assoclist', { device: f.ifname }));
+            });
+        });
+        if (!tasks.length) return;
+
+        var results = await Promise.allSettled(tasks);
+        for (var i = 0; i < names.length; i++) {
+            var info = results[i * 2], list = results[i * 2 + 1];
+            if (info && info.status === 'fulfilled' && info.value) state.rt[names[i]] = info.value;
+            var n = 0;
+            if (list && list.status === 'fulfilled' && list.value && Array.isArray(list.value.results))
+                n = list.value.results.length;
+            state.clients[names[i]] = n;
+        }
+        if (render) renderAll();
+    }
+
+    async function load() {
+        showErr(null);
+        try {
+            var d = await API.call('mk.apwireless', 'info', {});
+            if (!d || d.error) throw new Error((d && d.error) || '加载失败');
+
+            state.info = d;
+            state.radios = d.radios || [];
+            if (!state.radios.length) {
+                $('radioPills').innerHTML = '<li class="small text-muted">未发现无线射频设备</li>';
+                $('paramBody').innerHTML = '<span class="text-muted small">未发现无线射频设备</span>';
+                $('rtBody').innerHTML = '<span class="text-muted small">—</span>';
+                return;
+            }
+            if (!radioById(state.cur)) state.cur = state.radios[0].id;
+
+            renderPills();
+            renderAll();
+            await loadRuntime(true);
+            $('updatedAt').textContent = '最后刷新：' + new Date().toLocaleTimeString();
+        } catch (e) {
+            showErr('加载失败：' + (e.message || e));
+        }
+    }
+
+    /* ================= 渲染：射频选择 ================= */
+
+    function renderPills() {
+        $('radioPills').innerHTML = state.radios.map(function (r) {
+            var cls = (r.id === state.cur) ? ' active' : '';
+            var dot = r.up ? '<span class="status-dot online ms-1"></span>' : '<span class="status-dot offline ms-1"></span>';
+            var badge = r.disabled ? ' <span class="badge bg-secondary">已停用</span>'
+                                   : (r.up ? '' : ' <span class="badge bg-warning text-dark">未启动</span>');
+            return '<li class="nav-item">' +
+                '<button class="nav-link' + cls + '" type="button" data-radio="' + Layout.esc(r.id) + '">' +
+                '<i class="fas fa-wifi me-1"></i>' + Layout.esc(r.id) + ' · ' + Layout.esc(r.band_label || '-') +
+                dot + badge + '</button></li>';
+        }).join('');
+
+        $('radioPills').querySelectorAll('button[data-radio]').forEach(function (b) {
+            b.addEventListener('click', function () { switchRadio(b.getAttribute('data-radio')); });
+        });
+
+        var r = curRadio();
+        $('radioBadge').textContent = r ? (r.id + ' · ' + (r.band_label || '-')) : '无射频';
+        Layout.setFooterInfo(r ? (r.id + ' ' + (r.ifname || '') + ' · ' + (r.htmode_label || '')) : '无射频');
+    }
+
+    function switchRadio(id) {
+        if (id === state.cur) return;
+        state.cur = id;
+        renderPills();
+        renderAll();
+    }
+
+    /* ================= 渲染：参数分组 ================= */
+
+    function paramsBasic(r, f) {
+        return row('射频设备', pick(r.id)) +
+            row('硬件接口', pick(r.ifname || '（未启动）')) +
+            row('频段', pick(r.band_label)) +
+            row('接口名（UCI 段）', pick(f ? f.section : '')) +
+            row('工作模式', pick(f ? f.mode_label : '')) +
+            row('SSID（网络名称）', f && f.ssid ? '<span class="fw-semibold">' + Layout.esc(ssidText(f.ssid)) + '</span>'
+                                                : '<span class="text-muted">（未设置）</span>') +
+            row('广播 SSID', f ? (f.hidden ? '<span class="text-warning">已隐藏</span>' : '<span class="text-success">是</span>') : '-') +
+            row('绑定网络', pick(f ? f.network : '')) +
+            row('射频状态', r.disabled ? '<span class="text-muted">已停用</span>'
+                                        : (r.up ? '<span class="status-dot online"></span> 运行中'
+                                                : '<span class="status-dot offline"></span> 未启动'));
+    }
+
+    function paramsChannel(r, f) {
+        var rt = rtOf(r.ifname);
+        var cfgW = r.htmode_label;
+        var rtW = (rt && rt.htmode) ? rt.htmode : '-';
+        return row('配置信道', pick(r.channel_label)) +
+            row('配置频宽', pick(cfgW)) +
+            row('实际信道', rt ? pick(rt.channel) : '<span class="text-muted">需射频运行中</span>') +
+            row('中心频率', rt ? pick(rt.frequency ? (rt.frequency + ' MHz') : '') : '<span class="text-muted">-</span>') +
+            row('实际频宽', pick(rtW)) +
+            row('发射功率', (rt && rt.txpower !== undefined && rt.txpower !== null)
+                ? Layout.esc(rt.txpower + ' dBm') + (r.txpower ? ' <span class="small text-muted">（配置 ' + Layout.esc(r.txpower) + '）</span>' : '')
+                : pick(r.txpower)) +
+            row('国家 / 地区', pick((rt && rt.country) ? rt.country : r.country));
+    }
+
+    function paramsSecurity(r, f) {
+        if (!f) return row('加密方式', '<span class="text-muted">-</span>');
+        var rt = rtOf(r.ifname);
+        var rtEnc = (rt && rt.encryption) ? (isTrue(rt.encryption.enabled) ? '已启用' : '未启用') : '-';
+        var keyCell = f.has_key
+            ? '<span class="text-danger fw-semibold"><i class="fas fa-lock me-1"></i>****</span> <span class="small text-muted">（已设置，不展示明文）</span>'
+            : '<span class="text-muted">未设置</span>';
+        return row('加密方式', pick(f.encryption_label)) +
+            row('无线加密（运行时）', pick(rtEnc)) +
+            row('预共享密钥', keyCell) +
+            row('客户端隔离', yesNo(f.isolate, '已开启', '未开启')) +
+            row('WMM（QoS）', f.wmm === '' ? '<span class="text-muted">默认（开启）</span>' : yesNo(f.wmm, '已开启', '已关闭')) +
+            row('最大接入数', f.maxassoc ? Layout.esc(f.maxassoc) : '<span class="text-muted">不限</span>');
+    }
+
+    function paramsAdvanced(r, f) {
+        var rt = rtOf(r.ifname);
+        var hwText = (rt && rt.hwmodes_text) ? rt.hwmodes_text : '-';
+        var htList = (rt && Array.isArray(rt.htmodes)) ? rt.htmodes.join(' / ') : '-';
+        var hw = (rt && rt.hardware && rt.hardware.name) ? rt.hardware.name : '-';
+        return row('802.11r 快速漫游', f ? yesNo(f.ieee80211r, '已启用', '未启用') : '-') +
+            row('Beacon 间隔', (f && f.beacon_int) ? Layout.esc(f.beacon_int + ' ms') : '<span class="text-muted">默认（100 ms）</span>') +
+            row('驱动类型', pick(r.type)) +
+            row('射频路径', pick(r.path)) +
+            row('网卡型号', pick(hw)) +
+            row('支持硬件模式', pick(hwText)) +
+            row('支持 HT 模式', pick(htList));
+    }
+
+    function renderParams() {
+        var r = curRadio();
+        if (!r) { $('paramBody').innerHTML = '<span class="text-muted small">无射频</span>'; return; }
+
+        var f = (r.ifaces && r.ifaces.length) ? r.ifaces[0] : null;
+        var body;
+        if (state.curTab === 'channel')      body = paramsChannel(r, f);
+        else if (state.curTab === 'security') body = paramsSecurity(r, f);
+        else if (state.curTab === 'advanced') body = paramsAdvanced(r, f);
+        else                                  body = paramsBasic(r, f);
+
+        var multi = (r.ifaces && r.ifaces.length > 1)
+            ? '<div class="small text-muted mb-2"><i class="fas fa-circle-info me-1"></i>该射频下有 ' + r.ifaces.length + ' 个无线接口，此处展示第一个（' + Layout.esc(r.ifaces[0].section) + '）。</div>'
+            : '';
+
+        $('paramBody').innerHTML = multi + '<dl class="row mb-0 small dl-tight">' + body + '</dl>';
+    }
+
+    /* ================= 渲染：实时状态 ================= */
+
+    function renderRuntime() {
+        var r = curRadio();
+        if (!r) return;
+        $('rtIface').textContent = r.ifname || '-';
+        $('rtClients').textContent = state.rt && state.clients[r.ifname] !== undefined ? state.clients[r.ifname] : '-';
+
+        var rt = rtOf(r.ifname);
+        if (!rt) {
+            $('rtBody').innerHTML = '<dl class="row mb-0 small dl-tight">' +
+                row('状态', r.disabled ? '<span class="text-muted">已停用</span>' : '<span class="status-dot offline"></span> 无实时数据') +
+                row('说明', '<span class="text-muted">射频未启动或 iwinfo 不可用</span>') +
+                '</dl>';
+            return;
+        }
+
+        /* 本机以 Master 模式工作，Signal 恒为 0 dBm → 只展示链路质量与噪声 */
+        var q = (rt.quality !== undefined && rt.quality !== null) ? rt.quality : null;
+        $('rtBody').innerHTML = '<dl class="row mb-0 small dl-tight">' +
+            row('状态', '<span class="status-dot online"></span> 运行中') +
+            row('SSID', rt.ssid ? Layout.esc(ssidText(rt.ssid)) : '<span class="text-muted">（未广播）</span>') +
+            row('BSSID', '<code class="small">' + Layout.esc(rt.bssid || '-') + '</code>') +
+            row('工作模式', pick(rt.mode)) +
+            row('信道', pick(rt.channel) + ' <span class="small text-muted">(' + Layout.esc((rt.frequency || '') ? rt.frequency + ' MHz' : '') + ')</span>') +
+            row('发射功率', rt.txpower !== undefined && rt.txpower !== null ? Layout.esc(rt.txpower + ' dBm') : '<span class="text-muted">-</span>') +
+            row('噪声', rt.noise !== undefined && rt.noise !== null ? Layout.esc(rt.noise + ' dBm') : '<span class="text-muted">-</span>') +
+            row('链路质量', signalBar(q, rt.quality_max || 70) +
+                ' <span class="small text-muted">' + Layout.esc(q === null ? '-' : (q + ' / ' + (rt.quality_max || 70))) + '</span>') +
+            '</dl>';
+    }
+
+    function renderAll() {
+        renderParams();
+        renderRuntime();
+        renderScan();
+    }
+
+    /* ================= 渲染：信道扫描 ================= */
+
+    /* iwinfo scan 的 encryption 对象 → { id, label, badge } */
+    function encOfScan(e) {
+        if (!e || !isTrue(e.enabled))
+            return { id: 'none', label: '开放', badge: 'danger' };
+
+        var auth = Array.isArray(e.authentication) ? e.authentication : [];
+        var wpa  = Array.isArray(e.wpa) ? e.wpa : [];
+        var sae = auth.indexOf('sae') >= 0;
+        var psk = auth.indexOf('psk') >= 0;
+
+        if (sae && psk) return { id: 'psk2+sae', label: 'WPA2/WPA3 混合', badge: 'success' };
+        if (sae) return { id: 'sae', label: 'WPA3-SAE', badge: 'success' };
+        if (psk) {
+            if (wpa.indexOf(1) >= 0 && wpa.indexOf(2) < 0) return { id: 'psk', label: 'WPA1-PSK', badge: 'warning' };
+            return { id: 'psk2', label: 'WPA2-PSK', badge: 'success' };
+        }
+        if (wpa.length) return { id: 'psk2', label: 'WPA', badge: 'warning' };
+        return { id: 'wep', label: 'WEP', badge: 'warning' };
+    }
+
+    /* 单个 operation 块的通道宽度（MHz）。
+     * 注意：真机厂商 iwinfo 会把 HT 的「20/40 双支持」拼成脏值 2040
+     * （实测 2040 与 20 混用，与 secondary_channel_offset 无关），
+     * 不能当数值用，须按二级信道偏移还原真实工作宽度。 */
+    function opWidth(op) {
+        if (!op || op.channel_width === undefined || op.channel_width === null) return null;
+        var v = Number(op.channel_width);
+        if (isNaN(v) || v <= 0) return null;
+        if (v <= 320) return v;                       /* 20/40/80/160/320 为正常值 */
+        if (v === 2040)                               /* "20"+"40" 脏值 */
+            return (op.secondary_channel_offset && op.secondary_channel_offset !== 'no secondary') ? 40 : 20;
+        return null;
+    }
+
+    /* 扫描结果的频宽：优先取 VHT / HE 的协商宽度，回落 HT */
+    function widthOf(res) {
+        var w = null;
+        [res.he_operation, res.vht_operation, res.ht_operation].forEach(function (op) {
+            var v = opWidth(op);
+            if (v !== null && (w === null || v > w)) w = v;
+        });
+        return w;
+    }
+
+    function scanCell(res) {
+        var pct = dbmPct(res.signal);
+        if (pct === null) return '<span class="text-muted">—</span>';
+        var cls = pct >= 80 ? 'bg-success' : (pct >= 50 ? 'bg-warning' : 'bg-secondary');
+        return '<div class="small">' + pct + '%</div>' +
+            '<div class="progress mt-1" style="height:5px;">' +
+            '<div class="progress-bar ' + cls + '" style="width:' + pct + '%"></div></div>';
+    }
+
+    function renderScan() {
+        var r = curRadio();
+        var body = $('scanBody');
+        var note = $('scanNote');
+
+        if (!r || !r.ifname) {
+            body.innerHTML = '<tr><td colspan="8" class="text-center text-muted small py-3">射频未启动，无法扫描</td></tr>';
+            note.textContent = '尚未扫描';
+            return;
+        }
+
+        var pack = state.scan[r.id];
+        if (!pack || !pack.results.length) {
+            body.innerHTML = '<tr><td colspan="8" class="text-center text-muted small py-3">该射频尚未扫描，点「开始扫描」获取周边网络</td></tr>';
+            note.textContent = pack ? (fmtClock(pack.at) + ' · 无结果') : '尚未扫描';
+            return;
+        }
+
+        note.textContent = '发现 ' + pack.results.length + ' 个网络 · 扫描于 ' + fmtClock(pack.at) +
+            ' · 耗时 ' + pack.elapsed_s + ' 秒';
+
+        body.innerHTML = pack.results.map(function (res) {
+            var enc = encOfScan(res.encryption);
+            var w = widthOf(res);
+            var ssidCell = res.ssid
+                ? '<span class="fw-semibold">' + Layout.esc(ssidText(res.ssid)) + '</span>'
+                : '<span class="text-muted">（隐藏网络）</span>';
+            return '<tr>' +
+                '<td>' + ssidCell + '</td>' +
+                '<td><code class="small">' + Layout.esc(res.bssid || '-') + '</code></td>' +
+                '<td class="small">' + Layout.esc(res.channel === undefined || res.channel === null ? '—' : res.channel) + '</td>' +
+                '<td class="small">' + (w === null ? '<span class="text-muted">—</span>' : Layout.esc(w + ' MHz')) + '</td>' +
+                '<td class="small"><span class="badge bg-' + enc.badge + '">' + Layout.esc(enc.label) + '</span></td>' +
+                '<td>' + scanCell(res) + '</td>' +
+                '<td class="small">' + Layout.esc(res.signal === undefined || res.signal === null ? '—' : res.signal) + '</td>' +
+                '<td><button class="btn btn-outline-secondary btn-sm py-0 copy-btn" data-bssid="' + Layout.esc(res.bssid || '') + '" title="复制 BSSID"><i class="fas fa-copy"></i></button></td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    async function doScan() {
+        var r = curRadio();
+        if (state.scanning || !r) return;
+        if (r.disabled) { notify('该射频已停用，无法扫描', 'warning'); return; }
+        if (!r.ifname) { notify('该射频当前没有可用的无线接口，无法扫描', 'warning'); return; }
+
+        state.scanning = true;
+        var btn = $('scanBtn');
+        var old = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>扫描中…';
+        $('scanNote').textContent = '正在扫描 ' + (r.band_label || '') + '…';
+        notify('正在扫描 ' + (r.band_label || '') + '…射频会短暂离开工作信道', 'info');
+
+        var t0 = Date.now();
+        try {
+            var res = await API.call('iwinfo', 'scan', { device: r.ifname });
+            var list = (res && Array.isArray(res.results)) ? res.results.slice() : [];
+            var elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+            /* 按信号由强到弱排序（dBm 越接近 0 越强） */
+            list.sort(function (a, b) {
+                var x = (a.signal === undefined || a.signal === null) ? -999 : Number(a.signal);
+                var y = (b.signal === undefined || b.signal === null) ? -999 : Number(b.signal);
+                return y - x;
+            });
+
+            state.scan[r.id] = { results: list, at: Date.now() / 1000, elapsed_s: elapsed };
+            renderScan();
+            notify(list.length ? ('扫描完成：发现 ' + list.length + ' 个网络（耗时 ' + elapsed + ' 秒）')
+                               : '扫描完成：未发现任何网络', list.length ? 'success' : 'warning');
+        } catch (e) {
+            if (e.message && e.message.indexOf('会话已失效') >= 0) return;
+            $('scanNote').textContent = '扫描失败';
+            notify('扫描失败：' + (e.message || e), 'danger');
+        } finally {
+            state.scanning = false;
+            btn.disabled = false;
+            btn.innerHTML = old;
+        }
+    }
+
+    function copyBssid(bssid) {
+        if (!bssid) return;
+        function fallback() {
+            var ta = document.createElement('textarea');
+            ta.value = bssid;
+            ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); notify('已复制 BSSID ' + bssid, 'success'); }
+            catch (e) { notify('复制失败，请手动选择', 'danger'); }
+            document.body.removeChild(ta);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(bssid)
+                .then(function () { notify('已复制 BSSID ' + bssid, 'success'); })
+                .catch(fallback);
+        } else {
+            fallback();
+        }
+    }
+
+    /* ================= 事件 ================= */
+
+    $('paramTabs').querySelectorAll('button[data-tab]').forEach(function (b) {
+        b.addEventListener('click', function () {
+            state.curTab = b.getAttribute('data-tab');
+            $('paramTabs').querySelectorAll('button[data-tab]').forEach(function (x) {
+                x.classList.toggle('active', x === b);
+            });
+            renderParams();
+        });
+    });
+
+    $('scanBtn').addEventListener('click', doScan);
+    $('refreshBtn').addEventListener('click', load);
+
+    /* 复制按钮用事件委派（表格会随扫描结果重建） */
+    $('scanBody').addEventListener('click', function (ev) {
+        var btn = ev.target.closest ? ev.target.closest('.copy-btn') : null;
+        if (!btn) return;
+        copyBssid(btn.getAttribute('data-bssid'));
+    });
+
+    /* ================= 启动 ================= */
+
+    (async function () {
+        if (!(await API.guard())) return;
+        await Layout.mount('wireless.html');
+        await load();
+        /* 只刷实时状态与终端数（不触发扫描，避免周期性打断业务） */
+        state.timer = setInterval(function () { loadRuntime(true); }, 10000);
+    })();
+})();
+</script>
+
+</body>
+</html>

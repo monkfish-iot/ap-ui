@@ -1,0 +1,416 @@
+<!-- SPDX-FileCopyrightText: 2026 Monkfish IoT -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络设置 - AP 管理</title>
+<link href="assets/css/bootstrap.min.css" rel="stylesheet">
+<link href="assets/css/all.min.css" rel="stylesheet">
+<link href="assets/css/wrthub.css" rel="stylesheet">
+<style>
+body { margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+#app  { flex: 1 1 auto; display: flex; min-height: 0; }
+.main { flex: 1 1 auto; overflow-y: auto; padding: 0.9rem; }
+/* 回滚倒计时警示框 */
+.rb-warn { animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.7; } }
+</style>
+</head>
+<body>
+
+<header id="whNavbar"></header>
+<div id="app">
+    <aside id="whSidebar"></aside>
+    <main class="main">
+
+        <div id="toastContainer" class="position-fixed top-0 end-0 p-3" style="z-index:11;"></div>
+        <div id="errBox" class="alert alert-danger small d-none"></div>
+        <div id="succBox" class="alert alert-success small d-none"></div>
+
+        <!-- 页面标题 -->
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="mb-0"><i class="fas fa-network-wired me-1"></i>网络设置</h6>
+            <span class="small text-muted">修改 IP 会切断当前连接，60 秒未确认将自动回滚</span>
+        </div>
+
+        <!-- 回滚倒计时警示（settings_set 成功后显示） -->
+        <div id="rollbackBar" class="alert alert-warning rb-warn d-none">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <i class="fas fa-triangle-exclamation me-1"></i>
+                    网络已切换，<span id="rbCountdown">60</span> 秒内请点击「<span class="fw-bold">保留修改</span>」，否则自动恢复原配置。
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-success" id="keepBtn"><i class="fas fa-check me-1"></i>保留修改</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="waitBtn">继续等待</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 当前状态 -->
+        <div class="card shadow-sm mb-3">
+            <div class="card-header">
+                <i class="fas fa-circle-info me-1"></i>当前运行状态
+            </div>
+            <div class="card-body" id="curState">
+                <div class="text-muted small">加载中...</div>
+            </div>
+        </div>
+
+        <!-- 设置表单 -->
+        <div class="card shadow-sm mb-3">
+            <div class="card-header">
+                <i class="fas fa-sliders me-1"></i>网络配置
+            </div>
+            <div class="card-body">
+                <!-- DHCP ↔ static 切换 -->
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">IP 获取方式</label>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="proto" id="protoDhcp" value="dhcp">
+                        <label class="form-check-label" for="protoDhcp">
+                            <i class="fas fa-broadcast-tower me-1"></i>DHCP 客户端
+                            <span class="text-muted small">（自动从上游获取）</span>
+                        </label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="proto" id="protoStatic" value="static">
+                        <label class="form-check-label" for="protoStatic">
+                            <i class="fas fa-link me-1"></i>静态 IP
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 静态模式展开 -->
+                <div id="staticPanel" class="d-none">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label small fw-semibold">IP 地址</label>
+                            <input type="text" class="form-control form-control-sm" id="fIpaddr" placeholder="例如 192.168.15.54" pattern="[0-9.]+">
+                            <div class="form-text small text-muted">仅支持同网段 IP，避免彻底失联</div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold">子网掩码</label>
+                            <select class="form-select form-select-sm" id="fPrefix">
+                                <option value="24">/24 (255.255.255.0)</option>
+                                <option value="16">/16 (255.255.0.0)</option>
+                                <option value="8">/8 (255.0.0.0)</option>
+                                <option value="25">/25 (255.255.255.128)</option>
+                                <option value="23">/23 (255.255.254.0)</option>
+                                <option value="22">/22 (255.255.252.0)</option>
+                                <option value="21">/21 (255.255.248.0)</option>
+                                <option value="20">/20 (255.255.240.0)</option>
+                                <option value="19">/19 (255.255.224.0)</option>
+                                <option value="18">/18 (255.255.192.0)</option>
+                                <option value="17">/17 (255.255.128.0)</option>
+                                <option value="26">/26 (255.255.255.192)</option>
+                                <option value="27">/27 (255.255.255.224)</option>
+                                <option value="28">/28 (255.255.255.240)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold">网关</label>
+                            <input type="text" class="form-control form-control-sm" id="fGateway" placeholder="可选">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">DNS 服务器（可选，逗号分隔）</label>
+                        <input type="text" class="form-control form-control-sm" id="fDns" placeholder="例如 192.168.15.1, 223.5.5.5">
+                        <div class="form-text small text-muted">留空则使用上游 DHCP 下发的 DNS</div>
+                    </div>
+                </div>
+
+                <!-- DHCP 提示 -->
+                <div id="dhcpHint" class="alert alert-info small py-2 d-none">
+                    <i class="fas fa-info-circle me-1"></i>
+                    DHCP 模式下，IP 地址、掩码、网关、DNS 都由上游 DHCP 服务器自动分配。
+                </div>
+
+                <!-- 按钮 -->
+                <div class="d-flex gap-2 mt-3">
+                    <button class="btn btn-primary btn-sm" id="saveBtn"><i class="fas fa-save me-1"></i>保存设置</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="resetBtn"><i class="fas fa-rotate-left me-1"></i>重置</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 同网段提示 -->
+        <div class="card shadow-sm">
+            <div class="card-header">
+                <i class="fas fa-shield-halved me-1"></i>安全说明
+            </div>
+            <div class="card-body small text-muted">
+                <ul class="mb-0 ps-3">
+                    <li>修改静态 IP 时，<span class="text-danger">新 IP 必须与当前 IP 处于同一子网</span>，否则后端会拒绝写入。</li>
+                    <li>设置生效后 60 秒内未点击「保留修改」，系统会自动回滚到上一版配置。</li>
+                    <li>切换 <span class="text-warning">DHCP → 静态</span> 时，如果新 IP 与网关不在同一网段，设备将无法上网。</li>
+                </ul>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script src="assets/js/api.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+(function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var state = null;       /* 当前 settings 返回 */
+    var rbTimer = null;     /* 回滚倒计时 */
+    var rbRemaining = 0;
+
+    /* ---- 初始化 ---- */
+    async function init() {
+        await Layout.mount('network.html');
+        loadSettings();
+        bindEvents();
+    }
+
+    /* ---- 加载当前设置 ---- */
+    function loadSettings() {
+        showError(null);
+        API.call('mk.apnet', 'settings', {}).then(function (res) {
+            if (!res || res.error) {
+                showError((res && res.error) || '无法读取网络设置');
+                return;
+            }
+            state = res;
+            renderCurrent(res);
+            fillForm(res);
+        }).catch(function (err) {
+            showError('加载失败：' + err);
+        });
+    }
+
+    /* ---- 渲染当前运行状态 ---- */
+    function renderCurrent(s) {
+        var rt = s.runtime || {};
+        var protoBadge =
+            s.proto === 'dhcp' ? '<span class="badge bg-info">DHCP 客户端</span>' :
+            s.proto === 'static' ? '<span class="badge bg-primary">静态 IP</span>' :
+            '<span class="badge bg-secondary">' + Layout.esc(s.proto) + '</span>';
+        var dns = (Array.isArray(rt.dns) && rt.dns.length) ? rt.dns.map(Layout.esc).join(', ') : '—';
+        var html =
+            '<div class="table-responsive">' +
+            '<table class="table table-sm table-borderless mb-0 align-middle text-nowrap">' +
+            '<thead><tr class="text-muted small">' +
+                '<th>接口</th><th>协议</th><th>IP 地址</th><th>网关</th><th>DNS</th>' +
+            '</tr></thead>' +
+            '<tbody><tr>' +
+                '<td class="font-monospace">' + Layout.esc(s.iface) + '</td>' +
+                '<td>' + protoBadge + '</td>' +
+                '<td class="font-monospace">' + Layout.esc(rt.cidr || rt.ip || '—') + '</td>' +
+                '<td class="font-monospace">' + Layout.esc(rt.gateway || '—') + '</td>' +
+                '<td class="font-monospace">' + dns + '</td>' +
+            '</tr></tbody>' +
+            '</table></div>';
+        $('curState').innerHTML = html;
+
+        /* 如果后端已有活跃的回滚定时器（上次设置后还没保留），恢复倒计时 UI */
+        if (s.rollback && s.rollback.active) {
+            startRbCountdown(s.rollback.seconds || 60);
+        }
+    }
+
+    /* ---- 填充表单默认值 ---- */
+    function fillForm(s) {
+        var proto = s.proto || 'dhcp';
+        $('protoDhcp').checked = (proto === 'dhcp');
+        $('protoStatic').checked = (proto === 'static');
+        toggleProtoPanel();
+
+        /* 表单默认值优先从 runtime 拿（因为 dhcp 模式下 uci 里没有） */
+        var rt = s.runtime || {};
+        $('fIpaddr').value = rt.ip || s.uci.ip || '';
+        var p = rt.prefix || s.uci.prefix || 24;
+        $('fPrefix').value = '' + p;
+        $('fGateway').value = rt.gateway || s.uci.gateway || '';
+        if (Array.isArray(rt.dns) && rt.dns.length)
+            $('fDns').value = rt.dns.join(', ');
+    }
+
+    /* ---- 事件绑定 ---- */
+    function bindEvents() {
+        document.querySelectorAll('input[name="proto"]').forEach(function (el) {
+            el.addEventListener('change', toggleProtoPanel);
+        });
+        $('saveBtn').addEventListener('click', onSave);
+        $('resetBtn').addEventListener('click', loadSettings);
+        $('keepBtn').addEventListener('click', onKeep);
+        $('waitBtn').addEventListener('click', function () {
+            showToast('已隐藏倒计时提示，' + rbRemaining + ' 秒后仍会自动回滚', 'info');
+            $('rollbackBar').classList.add('d-none');
+        });
+    }
+
+    function toggleProtoPanel() {
+        var proto = document.querySelector('input[name="proto"]:checked').value;
+        $('staticPanel').classList.toggle('d-none', proto !== 'static');
+        $('dhcpHint').classList.toggle('d-none', proto !== 'dhcp');
+    }
+
+    /* ---- 前端基础校验 ---- */
+    function validateForm() {
+        var proto = document.querySelector('input[name="proto"]:checked').value;
+        var data = { proto: proto };
+
+        if (proto === 'static') {
+            var ip = $('fIpaddr').value.trim();
+            var prefix = parseInt($('fPrefix').value, 10);
+            var gw = $('fGateway').value.trim();
+            var dns = $('fDns').value.trim();
+
+            if (!/^[0-9]{1,3}(\.[0-9]{1,3}){3}$/.test(ip))
+                return 'IP 地址格式不正确';
+            if (!(prefix >= 8 && prefix <= 30))
+                return '子网掩码不在有效范围';
+            if (gw && !/^[0-9]{1,3}(\.[0-9]{1,3}){3}$/.test(gw))
+                return '网关地址格式不正确';
+
+            /* 同网段预校验 */
+            if (state && state.runtime && state.runtime.ip && state.runtime.prefix) {
+                var curIp = state.runtime.ip;
+                var curPrefix = state.runtime.prefix;
+                if (!sameSubnet(ip, curIp, Math.min(prefix, curPrefix))) {
+                    return '新 IP ' + ip + ' 与当前 IP ' + curIp + '/' + curPrefix + ' 不在同一子网';
+                }
+            }
+
+            data.ipaddr = ip;
+            data.prefix = prefix;
+            data.gateway = gw;
+            data.dns = dns;
+        }
+
+        return data;
+    }
+
+    /* ---- 同网段判断（前端版，同 ucode 后端逻辑）---- */
+    function ipToInt(s) {
+        var p = s.split('.').map(function (x) { return parseInt(x, 10); });
+        return ((p[0] * 256 + p[1]) * 256 + p[2]) * 256 + p[3];
+    }
+    function sameSubnet(a, b, prefix) {
+        if (!a || !b || !prefix) return true; /* 拿不到就跳过，后端兜底 */
+        var mask = 0;
+        for (var i = 0; i < 32; i++) mask = mask * 2 + (i < prefix ? 1 : 0);
+        return (ipToInt(a) & mask) === (ipToInt(b) & mask);
+    }
+
+    /* ---- 保存 ---- */
+    function onSave() {
+        showError(null);
+        showSuccess(null);
+
+        var v = validateForm();
+        if (typeof v === 'string') { showError(v); return; }
+
+        $('saveBtn').disabled = true;
+        $('saveBtn').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>应用中...';
+
+        API.call('mk.apnet', 'settings_set', v).then(function (res) {
+            $('saveBtn').disabled = false;
+            $('saveBtn').innerHTML = '<i class="fas fa-save me-1"></i>保存设置';
+
+            if (!res || res.error) {
+                showError((res && res.error) || '设置失败');
+                return;
+            }
+
+            showSuccess(res.message || '网络设置已应用');
+            startRbCountdown(res.rollback_seconds || 60);
+
+            /* network reload 后 rpcd 会重建，延迟刷新一次 */
+            setTimeout(function () {
+                loadSettings();
+            }, 3000);
+        }).catch(function (err) {
+            $('saveBtn').disabled = false;
+            $('saveBtn').innerHTML = '<i class="fas fa-save me-1"></i>保存设置';
+            showError('请求失败：' + err);
+        });
+    }
+
+    /* ---- 保留修改（取消回滚）---- */
+    function onKeep() {
+        $('keepBtn').disabled = true;
+        $('keepBtn').innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+        API.call('mk.apnet', 'rollback_cancel', {}).then(function (res) {
+            $('keepBtn').disabled = false;
+            $('keepBtn').innerHTML = '<i class="fas fa-check me-1"></i>保留修改';
+
+            if (res && res.cancelled) {
+                clearInterval(rbTimer);
+                $('rollbackBar').classList.add('d-none');
+                showToast('已保留修改，回滚定时器已取消', 'success');
+                loadSettings();
+            } else {
+                showError((res && res.error) || '取消回滚失败');
+            }
+        }).catch(function (err) {
+            $('keepBtn').disabled = false;
+            $('keepBtn').innerHTML = '<i class="fas fa-check me-1"></i>保留修改';
+            showError('请求失败：' + err);
+        });
+    }
+
+    /* ---- 回滚倒计时 UI ---- */
+    function startRbCountdown(seconds) {
+        clearInterval(rbTimer);
+        rbRemaining = seconds;
+        $('rbCountdown').textContent = rbRemaining;
+        $('rollbackBar').classList.remove('d-none');
+        $('rollbackBar').scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        rbTimer = setInterval(function () {
+            rbRemaining--;
+            $('rbCountdown').textContent = rbRemaining;
+            if (rbRemaining <= 0) {
+                clearInterval(rbTimer);
+                $('rollbackBar').classList.add('d-none');
+                showToast('时间到，配置已自动回滚', 'warning');
+                loadSettings();
+            }
+        }, 1000);
+    }
+
+    /* ---- UI 辅助 ---- */
+    function showError(msg) {
+        var el = $('errBox');
+        if (!msg) { el.classList.add('d-none'); el.textContent = ''; return; }
+        el.textContent = msg;
+        el.classList.remove('d-none');
+    }
+    function showSuccess(msg) {
+        var el = $('succBox');
+        if (!msg) { el.classList.add('d-none'); el.textContent = ''; return; }
+        el.textContent = msg;
+        el.classList.remove('d-none');
+        setTimeout(function () { el.classList.add('d-none'); }, 5000);
+    }
+    function showToast(msg, type) {
+        type = type || 'info';
+        var c = $('toastContainer');
+        var el = document.createElement('div');
+        el.className = 'toast align-items-center text-bg-' + type + ' border-0 show';
+        el.setAttribute('role', 'alert');
+        el.innerHTML = '<div class="d-flex"><div class="toast-body small">' + Layout.esc(msg) + '</div>' +
+            '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>';
+        c.appendChild(el);
+        setTimeout(function () {
+            el.classList.remove('show');
+            setTimeout(function () { c.removeChild(el); }, 300);
+        }, 3000);
+    }
+
+    /* ---- 启动 ---- */
+    init();
+})();
+</script>
+
+</body>
+</html>
