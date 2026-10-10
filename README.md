@@ -42,7 +42,7 @@ Browser ──POST /ubus──▶ uhttpd ──▶ rpcd (JSON-RPC) ──▶ uco
 - **Firmware upgrade (固件升级)** — drag-and-drop sysupgrade image upload (via `cgi-io` to `/tmp/firmware.bin`), image verification (`sysupgrade -T`), md5/sha256, and an explicit confirmed flash.
 - **System log (系统日志)** — `logd` ring buffer viewer with All / System / Auth tabs, level filter, keyword search, auto-refresh, and a `CLEAR`-confirmation reset.
 - **Login / session** — reuses rpcd's built-in `session` object; the session id is kept in `localStorage`, expired sessions auto-redirect to the login page.
-- **Portal status (backend object)** — `mk.apportal` exposes a read-only view of the `webauthd` Portal / RADIUS / whitelist configuration and runtime state (process, ports, nginx proxy).
+
 
 ### Project structure
 
@@ -125,7 +125,7 @@ All objects live in `/usr/share/rpcd/ucode/` and are loaded by rpcd.
 | `mk.apmaint` | `reboot_system` | write | reboot the device — requires `confirm="REBOOT"` |
 | `mk.aplogs` | `logs` | read | `logd` entries with tab / level / keyword filtering |
 | `mk.aplogs` | `clear` | write | reset the `logd` buffer — requires `confirm="CLEAR"` |
-| `mk.apportal` | `info` | read | `webauthd` Portal / RADIUS / whitelist config + runtime state |
+
 
 The browser also calls two native objects **directly** (never through `mk.*`) to avoid a known ucode nested-`ubus` deadlock inside rpcd-hosted plugins:
 
@@ -191,7 +191,7 @@ You may obtain a copy of the License at
 - **固件升级** —— 拖拽上传 sysupgrade 镜像（经 `cgi-io` 落到 `/tmp/firmware.bin`）、镜像校验（`sysupgrade -T`）、md5/sha256，以及需显式确认的刷写。
 - **系统日志** —— `logd` 环形缓冲查看器，支持 全部 / 系统 / 认证 分页、级别过滤、关键字搜索、自动刷新，以及需输入 `CLEAR` 确认的重置。
 - **登录 / 会话** —— 复用 rpcd 自带的 `session` 对象，会话 id 存于 `localStorage`，失效自动跳转登录页。
-- **Portal 状态（后端对象）** —— `mk.apportal` 提供 `webauthd` 的 Portal / RADIUS / 白名单配置与运行状态（进程、端口、nginx 代理）只读视图。
+
 
 ### 目录结构
 
@@ -274,7 +274,7 @@ ln -sfn /tmp/apui /www/apui
 | `mk.apmaint` | `reboot_system` | 写 | 重启设备 —— 需要 `confirm="REBOOT"` |
 | `mk.aplogs` | `logs` | 读 | `logd` 日志，支持 分页 / 级别 / 关键字 过滤 |
 | `mk.aplogs` | `clear` | 写 | 重置 `logd` 缓冲 —— 需要 `confirm="CLEAR"` |
-| `mk.apportal` | `info` | 读 | `webauthd` 的 Portal / RADIUS / 白名单配置与运行状态 |
+
 
 浏览器还会**直接**调用两个原生对象（不经 `mk.*`），以规避 rpcd 托管插件内嵌套 `ubus` 调用导致的死锁：
 
